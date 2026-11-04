@@ -366,3 +366,21 @@ test('the tg_* tools are deferred, behind ToolSearch', async ($, on) => {
   expect(registered.length).toBeGreaterThan(0)
   expect(registered.every(tool => tool.isDeferred === true)).toBe(true)
 })
+
+// sec-default sends `prompt.compose` and `classic.*` past user-tier plugins on
+// managed machines, so the protocol rides on prompt context and a compaction
+// is heard on `session.compact`, both of which it leaves alone.
+test('the protocol reaches the model on the first prompt and again after a compaction', async ($, on) => {
+  engine(on)
+  on('prompt.submit', (_, e) => ({ text: e.text, context: e.context }))
+  on('session.compact', (_, e) => ({ messages: e.messages }) as never)
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  const ask = async (text: string) => ((await $.prompt.submit({ text, wait: false, origin: { kind: 'composer' } })) as { context?: string[] }).context?.join('\n') ?? ''
+  const PROTOCOL_LINE = 'A shared task graph is open beside this conversation'
+  expect(await ask('build the thing')).toContain(PROTOCOL_LINE)
+  expect(await ask('still going')).not.toContain(PROTOCOL_LINE)
+  await $.session.compact({ trigger: 'auto', messages: [{ role: 'user', text: 'summary', toolUses: [] }] } as never)
+  const after = await ask('after compact')
+  expect(after).toContain(PROTOCOL_LINE)
+  expect(after).toContain('is empty')
+})

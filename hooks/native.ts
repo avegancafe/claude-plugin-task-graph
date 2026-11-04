@@ -222,28 +222,40 @@ export const keepFresh = (on: On): void => {
     return next(e)
   })
 
-  on('prompt.compose', async ($, e, next) => {
-    const composed = await next(e)
+  // On a managed machine the built-in sec-default plugin sends `classic.*` past
+  // every user-installed plugin, so the SessionStart above never fires there;
+  // `session.compact` is not classic and does.
+  on('session.compact', async ($, e, next) => {
+    const result = await next(e)
+    if (e.agentId === undefined && e.trigger !== 'precompute' && result.skip === undefined) isShown = false
 
-    return { ...composed, sections: [...composed.sections, { id: 'task-graph', text: PROTOCOL, scope: 'session' as const }] }
+    return result
   })
 
+  // The protocol rides on the prompt's context, not a `prompt.compose` system
+  // prompt section: sec-default sends `prompt.compose` past user-installed
+  // plugins on managed machines, so a section never lands, while `prompt.submit`
+  // context is left alone. It goes with the graph whenever the conversation
+  // doesn't hold it (a new load, a compaction, a /clear).
   on('prompt.submit', async ($, e, next) => {
     if (e.command !== undefined) return next(e)
     const value = await read($, graph)
     // Unchanged since Claude last saw it: nothing to attach.
     if (isShown && value.rev === value.claudeSeen) return next(e)
+    const notes = isShown ? [] : [PROTOCOL]
     isShown = true
-    if (Object.keys(value.tasks).length === 0) return next({ ...e, context: [...(e.context ?? []), EMPTY] })
+    if (Object.keys(value.tasks).length === 0) return next({ ...e, context: [...(e.context ?? []), ...notes, EMPTY] })
     const changes = unseen(value)
-    const note = [
-      'Shared task graph (authoritative; the human edits it too):',
-      describe(value),
-      changes.length === 0 ? '' : `\nChanged by the human since you last looked:\n${summarizeChanges(changes)}`,
-    ].join('\n')
+    notes.push(
+      [
+        'Shared task graph (authoritative; the human edits it too):',
+        describe(value),
+        changes.length === 0 ? '' : `\nChanged by the human since you last looked:\n${summarizeChanges(changes)}`,
+      ].join('\n'),
+    )
     await seen($)
 
-    return next({ ...e, context: [...(e.context ?? []), note] })
+    return next({ ...e, context: [...(e.context ?? []), ...notes] })
   })
 
   // Between tool calls is the boundary a running turn has: a human change is
