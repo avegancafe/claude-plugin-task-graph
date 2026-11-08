@@ -258,6 +258,10 @@ test('the terminal draws rails in characters; a desktop indents and draws icons'
   expect(texts.length).toBeGreaterThan(4)
   expect(texts.every(one => one.props.mono === true)).toBe(true)
   expect((await terminal.find({ key: 'line-t4' }))?.text).toContain('└─ ○ Create models')
+  // The rails, dot and space never shrink, so a pane-wide title can't cover the dot.
+  const gutter = await terminal.find({ key: 'gutter-t4' })
+  expect(gutter?.props.flexShrink).toBe(0)
+  expect(gutter?.text).toBe('└─ ○ ')
   await terminal.unmount()
   // A desktop spaces its lines, so drawn rails never meet: depth is indentation.
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })

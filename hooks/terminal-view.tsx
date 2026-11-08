@@ -30,18 +30,21 @@ export function terminalRow(E: Elements, $: EngineInterface, row: Row, isSelecte
   if (isNew) parts.push(<Text mono color="suggestion"> new</Text>)
   const dot = <Text mono color={statusColor[task.status]}>{row.glyph}</Text>
 
-  // A parent's dot folds its group.
+  // A parent's dot folds its group. The rails, dot and space are one fixed
+  // column: a title as wide as the pane must not shrink them and cover the dot.
   return (
     <Box key={`line-${task.id}`} flexDirection="row">
-      <Text mono dimColor>{row.prefix}</Text>
-      {row.hasVisibleChildren || row.hidden > 0 ? (
-        <Button key={`fold-${task.id}`} plain onPress={() => toggleFold($, task.id)}>
-          {dot}
-        </Button>
-      ) : (
-        dot
-      )}
-      <Text mono> </Text>
+      <Box key={`gutter-${task.id}`} flexDirection="row" flexShrink={0}>
+        <Text mono dimColor>{row.prefix}</Text>
+        {row.hasVisibleChildren || row.hidden > 0 ? (
+          <Button key={`fold-${task.id}`} plain onPress={() => toggleFold($, task.id)}>
+            {dot}
+          </Button>
+        ) : (
+          dot
+        )}
+        <Text mono> </Text>
+      </Box>
       <Button key={`row-${task.id}`} plain onPress={() => toggleDrawer($, task.id)}>
         {parts}
       </Button>
