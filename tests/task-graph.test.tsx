@@ -407,7 +407,7 @@ test('the protocol reaches the model on the first prompt and again after each co
   expect(await ask('after a second compact')).toContain(PROTOCOL_LINE)
 })
 
-test('the protocol reaches the model again after a /clear', async ($, on) => {
+test('the protocol reaches the model again after a /clear or a /resume', async ($, on) => {
   engine(on)
   on('prompt.submit', (_, e) => ({ text: e.text, context: e.context }))
   await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
@@ -415,8 +415,9 @@ test('the protocol reaches the model again after a /clear', async ($, on) => {
   const PROTOCOL_LINE = 'A shared task graph is open beside this conversation'
   expect(await ask('build the thing')).toContain(PROTOCOL_LINE)
   expect(await ask('still going')).not.toContain(PROTOCOL_LINE)
-  await $.session.end({ reason: 'prompt_input_exit', sessionId: 'session-a', resume: { id: 'session-a' } } as never)
-  expect(await ask('not cleared')).not.toContain(PROTOCOL_LINE)
   await $.session.end({ reason: 'clear', sessionId: 'session-a', resume: { id: 'session-a' } } as never)
   expect(await ask('after clear')).toContain(PROTOCOL_LINE)
+  expect(await ask('still going')).not.toContain(PROTOCOL_LINE)
+  await $.session.end({ reason: 'resume', sessionId: 'session-a', resume: { id: 'session-a' } } as never)
+  expect(await ask('after resume')).toContain(PROTOCOL_LINE)
 })

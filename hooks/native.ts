@@ -239,9 +239,11 @@ export const keepFresh = (on: On): void => {
   // `session.compact` past every user-installed plugin, so neither tells this
   // module about a compaction. A plugin's command hooks still run there:
   // `SessionStart` (matcher `compact`) writes a marker read at the next prompt.
-  // A /clear keeps the process and ends the session with reason `clear`.
+  // /clear, /resume and /branch keep the process and end the session (reason
+  // `clear` or `resume`), with no `session.start` after: the conversation that
+  // follows is not one this module sent the protocol to.
   on('session.end', async ($, e, next) => {
-    if (e.reason === 'clear') isShown = false
+    isShown = false
 
     return next(e)
   })
