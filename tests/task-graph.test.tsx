@@ -18,7 +18,12 @@ const PANE = {
 const SURFACES = ['terminal', 'desktop'] as const
 
 /** The engine beneath the plugin: just enough of it to start a session. */
-const engine = (on: On, stored: Record<string, unknown> = {}, registered: { isDeferred?: boolean }[] = []) => {
+const engine = (
+  on: On,
+  stored: Record<string, unknown> = {},
+  registered: { isDeferred?: boolean }[] = [],
+  files: Record<string, string> = {},
+) => {
   const clock = mock.clock(on, { now: 1_000 })
   mock.store(on, stored)
   on('command.register', () => ({ value: { command: 'task-graph' } }))
@@ -30,7 +35,14 @@ const engine = (on: On, stored: Record<string, unknown> = {}, registered: { isDe
   on('session.root', () => ({ value: '/repo' }))
   on('session.id', () => ({ value: 'session-a' }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  on('classic.SessionStart', () => ({}))
+  on('session.end', (_, e) => ({ sessionId: e.sessionId }))
+  on('process.hookEnv', () => ({ value: { CLAUDE_PLUGIN_DATA: '/data' } }))
+  on('fs.read', (_, e) => {
+    const text = files[e.path]
+    if (text === undefined) throw new Error(`ENOENT: ${e.path}`)
+
+    return { value: text }
+  })
   on('tool.call', () => ({ result: 'ran' }))
 
   return clock
@@ -342,7 +354,8 @@ test('on a desktop the drawer is a bordered card with no rail column', async ($,
 })
 
 test('a prompt carries the graph only when it changed since Claude last saw it', async ($, on) => {
-  engine(on)
+  const files: Record<string, string> = {}
+  engine(on, {}, [], files)
   on('prompt.submit', (_, e) => ({ text: e.text, context: e.context }))
   await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
   const ask = async (text: string) => ((await $.prompt.submit({ text, wait: false, origin: { kind: 'composer' } })) as { context?: string[] }).context?.join('\n') ?? ''
@@ -359,7 +372,7 @@ test('a prompt carries the graph only when it changed since Claude last saw it',
   expect(await ask('next')).toContain('canceled "Build the thing"')
   expect(await ask('again')).toBe('')
   // A compaction drops what Claude saw, so the next prompt carries the graph.
-  await $.classic.SessionStart({ source: 'compact' })
+  files['/data/compacted-session-a'] = '1-1'
   expect(await ask('after compact')).toContain('Shared task graph (authoritative')
 })
 
@@ -371,20 +384,39 @@ test('the tg_* tools are deferred, behind ToolSearch', async ($, on) => {
   expect(registered.every(tool => tool.isDeferred === true)).toBe(true)
 })
 
-// sec-default sends `prompt.compose` and `classic.*` past user-tier plugins on
-// managed machines, so the protocol rides on prompt context and a compaction
-// is heard on `session.compact`, both of which it leaves alone.
-test('the protocol reaches the model on the first prompt and again after a compaction', async ($, on) => {
-  engine(on)
+// sec-default sends `prompt.compose`, `classic.*` and `session.compact` past
+// user-tier plugins on managed machines, so the protocol rides on prompt
+// context, a compaction is heard through the marker hooks/mark-compacted.sh
+// (a command hook) leaves, and a /clear through `session.end`.
+test('the protocol reaches the model on the first prompt and again after each compaction', async ($, on) => {
+  const files: Record<string, string> = {}
+  engine(on, {}, [], files)
   on('prompt.submit', (_, e) => ({ text: e.text, context: e.context }))
-  on('session.compact', (_, e) => ({ messages: e.messages }) as never)
   await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
   const ask = async (text: string) => ((await $.prompt.submit({ text, wait: false, origin: { kind: 'composer' } })) as { context?: string[] }).context?.join('\n') ?? ''
   const PROTOCOL_LINE = 'A shared task graph is open beside this conversation'
   expect(await ask('build the thing')).toContain(PROTOCOL_LINE)
   expect(await ask('still going')).not.toContain(PROTOCOL_LINE)
-  await $.session.compact({ trigger: 'auto', messages: [{ role: 'user', text: 'summary', toolUses: [] }] } as never)
+  files['/data/compacted-session-a'] = '100-1'
   const after = await ask('after compact')
   expect(after).toContain(PROTOCOL_LINE)
   expect(after).toContain('is empty')
+  // The marker stays: only a new one sends the protocol again.
+  expect(await ask('still going')).not.toContain(PROTOCOL_LINE)
+  files['/data/compacted-session-a'] = '100-2'
+  expect(await ask('after a second compact')).toContain(PROTOCOL_LINE)
+})
+
+test('the protocol reaches the model again after a /clear', async ($, on) => {
+  engine(on)
+  on('prompt.submit', (_, e) => ({ text: e.text, context: e.context }))
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  const ask = async (text: string) => ((await $.prompt.submit({ text, wait: false, origin: { kind: 'composer' } })) as { context?: string[] }).context?.join('\n') ?? ''
+  const PROTOCOL_LINE = 'A shared task graph is open beside this conversation'
+  expect(await ask('build the thing')).toContain(PROTOCOL_LINE)
+  expect(await ask('still going')).not.toContain(PROTOCOL_LINE)
+  await $.session.end({ reason: 'prompt_input_exit', sessionId: 'session-a', resume: { id: 'session-a' } } as never)
+  expect(await ask('not cleared')).not.toContain(PROTOCOL_LINE)
+  await $.session.end({ reason: 'clear', sessionId: 'session-a', resume: { id: 'session-a' } } as never)
+  expect(await ask('after clear')).toContain(PROTOCOL_LINE)
 })
