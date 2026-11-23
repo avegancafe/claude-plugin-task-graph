@@ -210,26 +210,42 @@ const PROTOCOL = [
 const EMPTY =
   'The shared task graph is empty. If this request is real work (not a quick question), add the outcome(s) it asks for with tg_add before starting.'
 
+/**
+ * What hooks/mark-compacted.sh wrote for this session's latest compaction, or ''
+ * when there is none (or it can't be read: failing open only re-sends the
+ * protocol). The session id is read each time, as a /clear changes it.
+ */
+const compactionMark = async ($: EngineInterface): Promise<string> => {
+  try {
+    const dir = (await $.process.hookEnv()).CLAUDE_PLUGIN_DATA
+    if (dir === undefined || dir === '') return ''
+
+    return String(await $.fs.read(`${dir}/compacted-${await $.session.id()}`))
+  } catch {
+    return ''
+  }
+}
+
 /** Keeps Claude current with the graph at every boundary it has. */
 export const keepFresh = (on: On): void => {
   // Whether this conversation holds the graph as it stands. A fresh module (a new
   // session or a reload) and a compaction or /clear each assume it doesn't.
   let isShown = false
 
-  on('classic.SessionStart', async ($, e, next) => {
-    if (e.source === 'compact' || e.source === 'clear') isShown = false
+  // The marker hooks/mark-compacted.sh last left: it changes with each compaction.
+  let lastMark: string | undefined
+
+  // On a managed machine the built-in sec-default plugin sends `classic.*` and
+  // `session.compact` past every user-installed plugin, so neither tells this
+  // module about a compaction. A plugin's command hooks still run there:
+  // `SessionStart` (matcher `compact`) writes a marker read at the next prompt.
+  // /clear, /resume and /branch keep the process and end the session (reason
+  // `clear` or `resume`), with no `session.start` after: the conversation that
+  // follows is not one this module sent the protocol to.
+  on('session.end', async ($, e, next) => {
+    isShown = false
 
     return next(e)
-  })
-
-  // On a managed machine the built-in sec-default plugin sends `classic.*` past
-  // every user-installed plugin, so the SessionStart above never fires there;
-  // `session.compact` is not classic and does.
-  on('session.compact', async ($, e, next) => {
-    const result = await next(e)
-    if (e.agentId === undefined && e.trigger !== 'precompute' && result.skip === undefined) isShown = false
-
-    return result
   })
 
   // The protocol rides on the prompt's context, not a `prompt.compose` system
@@ -239,6 +255,9 @@ export const keepFresh = (on: On): void => {
   // doesn't hold it (a new load, a compaction, a /clear).
   on('prompt.submit', async ($, e, next) => {
     if (e.command !== undefined) return next(e)
+    const mark = await compactionMark($)
+    if (mark !== lastMark) isShown = false
+    lastMark = mark
     const value = await read($, graph)
     // Unchanged since Claude last saw it: nothing to attach.
     if (isShown && value.rev === value.claudeSeen) return next(e)
