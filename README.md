@@ -2,7 +2,8 @@
 
 A Claude Code mod: a live, git-log-style task graph in a pane beside the chat,
 which you and Claude edit together. Claude records the outcomes you ask for as
-tasks, claims one before working on it and completes it when done; you can
+tasks (and, on leaving plan mode, the approved plan's high-level jobs), claims one
+before working on it and completes it when done; you can
 reorder, edit, cancel or "work on next" any task from the pane, and Claude is
 told what you changed.
 
@@ -29,6 +30,8 @@ reopens it.
   last saw it (your edits in the pane, a new session, or after a compaction or
   `/clear`). Claude's own edits come back in its tool results instead.
 - Native `TaskCreate` / `TaskUpdate` / `TaskList` write to the same graph.
+- When plan mode ends with a plan, one short note is appended to the engine's exit
+  note asking Claude to summarize the plan into a few high-level tasks first.
 
 ## Contributing
 

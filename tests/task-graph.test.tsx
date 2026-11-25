@@ -421,3 +421,40 @@ test('the protocol reaches the model again after a /clear or a /resume', async (
   await $.session.end({ reason: 'resume', sessionId: 'session-a', resume: { id: 'session-a' } } as never)
   expect(await ask('after resume')).toContain(PROTOCOL_LINE)
 })
+
+test('a plan-mode exit with a plan asks Claude to put its jobs in the graph', async ($, on) => {
+  engine(on)
+  on('prompt.attachment', (_, e) => ({ text: e.text }))
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  const attach = async (input: Record<string, unknown>) =>
+    ((await $.prompt.attachment({ text: 'Exited plan mode.', origin: { kind: 'engine' }, ...input } as any)) as { text: string | null }).text
+  const exit = (detail: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
+    attach({ type: 'plan_mode_exit', detail: { planFilePath: '/plans/p.md', ...detail }, ...extra })
+
+  const noted = await exit({ hasPlan: true })
+  expect(noted).toContain('Exited plan mode.')
+  expect(noted).toContain('/plans/p.md')
+  expect(noted).toContain('high-level jobs')
+  expect(await exit({ hasPlan: false })).toBe('Exited plan mode.')
+  expect(await exit({ hasPlan: true }, { agentId: 'sub-1' })).toBe('Exited plan mode.')
+  expect(await attach({ type: 'todo_reminder' })).toBe('Exited plan mode.')
+})
+
+test('an approved plan asks once, through ExitPlanMode, and never for a rejected one', async ($, on) => {
+  let answer: Record<string, unknown> = { result: { plan: '# Plan', filePath: '/plans/p.md', isAgent: false } }
+  on('tool.call', { tool: 'ExitPlanMode' }, () => answer as any)
+  engine(on)
+  on('prompt.attachment', (_, e) => ({ text: e.text }))
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  const approve = async () => ((await $.tool.call({ tool: 'ExitPlanMode' } as any)) as { context?: string[] }).context?.join('\n') ?? ''
+  const exitNote = async () =>
+    ((await $.prompt.attachment({ type: 'plan_mode_exit', text: 'Exited plan mode.', origin: { kind: 'engine' }, detail: { planFilePath: '/plans/p.md', hasPlan: true } } as any)) as { text: string | null }).text
+
+  expect(await approve()).toContain('high-level jobs')
+  // The engine's exit note after that approval is left alone: the ask comes once.
+  expect(await exitNote()).toBe('Exited plan mode.')
+  answer = { isError: true, result: undefined, text: 'The user rejected the plan.' }
+  expect(await approve()).toBe('')
+  answer = { deny: 'no' }
+  expect(await approve()).toBe('')
+})
