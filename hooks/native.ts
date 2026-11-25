@@ -205,10 +205,21 @@ const PROTOCOL = [
   '- Before choosing new work, call tg_next: the human may have canceled, edited or reordered tasks. Never work on a canceled task.',
   '- Claim a task (tg_claim) before working on it, add a subtask (tg_add with parentId) when a real piece of work turns up, and complete with tg_complete.',
   '- When a task changed while you worked on it, re-read it and meet its current acceptance criteria before completing it.',
+  '- When plan mode ends with an approved plan, record its high-level jobs as tasks before executing (the plan-exit note says how).',
 ].join('\n')
 
 const EMPTY =
   'The shared task graph is empty. If this request is real work (not a quick question), add the outcome(s) it asks for with tg_add before starting.'
+
+/** Sent when plan mode ends with a plan: its jobs go in the graph before any work. */
+export const planNote = (planFilePath: string): string =>
+  [
+    `Before acting on the approved plan (${planFilePath}), summarize it into the shared task graph as its high-level jobs to be done:`,
+    '- Usually 2 to 6 tasks, one per outcome the human would recognize, titled by the result, in the order you will do them. Add them with tg_add (load it with ToolSearch first); set blockedBy only where order truly matters.',
+    "- Not the plan's individual lines or your micro-steps (reading files, running tests, committing).",
+    '- If a task for this request already exists, nest the jobs under it with parentId instead of adding a second one; never add the same job twice.',
+    '- Then work through them in view of the human: tg_claim a job before starting it, tg_complete it when done, and call tg_next between jobs. Complete the parent task last.',
+  ].join('\n')
 
 /**
  * What hooks/mark-compacted.sh wrote for this session's latest compaction, or ''
@@ -248,6 +259,32 @@ export const keepFresh = (on: On): void => {
     return next(e)
   })
 
+  // Plan mode ended with a plan: the jobs go in the graph first, so the human
+  // watches them get done. An approval answers through ExitPlanMode's result
+  // (`tool.call` reaches plugins even under sec-default); leaving the mode
+  // another way (shift+tab) only through the engine's exit note. The note that
+  // follows an approval is left as it is, so the ask comes once.
+  let isPlanNoted = false
+
+  on('tool.call', { tool: 'ExitPlanMode' }, async ($, e, next) => {
+    const ran = await next(e)
+    if (e.agentId !== undefined || 'deny' in ran || ran.isError === true) return ran
+    const result = (ran.result ?? {}) as { plan?: string | null; filePath?: string; isAgent?: boolean; awaitingLeaderApproval?: boolean }
+    if (result.isAgent === true || result.awaitingLeaderApproval === true || !result.plan) return ran
+    isPlanNoted = true
+
+    return { ...ran, context: [...(ran.context ?? []), planNote(result.filePath ?? 'the plan above')] }
+  })
+
+  on('prompt.attachment', { type: 'plan_mode_exit' }, async ($, e, next) => {
+    const out = await next(e)
+    const wasNoted = isPlanNoted
+    isPlanNoted = false
+    if (wasNoted || e.agentId !== undefined || out.text === null || e.detail?.hasPlan !== true) return out
+
+    return { text: `${out.text}\n\n${planNote(e.detail.planFilePath)}` }
+  })
+
   // The protocol rides on the prompt's context, not a `prompt.compose` system
   // prompt section: sec-default sends `prompt.compose` past user-installed
   // plugins on managed machines, so a section never lands, while `prompt.submit`
@@ -255,6 +292,8 @@ export const keepFresh = (on: On): void => {
   // doesn't hold it (a new load, a compaction, a /clear).
   on('prompt.submit', async ($, e, next) => {
     if (e.command !== undefined) return next(e)
+    // A new prompt is past any approval's exit note.
+    isPlanNoted = false
     const mark = await compactionMark($)
     if (mark !== lastMark) isShown = false
     lastMark = mark
